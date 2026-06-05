@@ -8,6 +8,9 @@
 *.so
 *.dylib
 
+# Compiled netwatch binary (built with `go build -o netwatch`)
+/netwatch
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -26,6 +29,11 @@ go.work.sum
 
 # env file
 .env
+
+# Runtime SQLite database (and WAL/SHM sidecars)
+*.db
+*.db-wal
+*.db-shm
 
 # Editor/IDE
 # .idea/

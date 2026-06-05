@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>netwatch</title>
+<style>
+  /* Four brightness steps from darkest to lightest. The two middle themes
+     ("dim" and "soft") soften the jump between the dark and light extremes. */
+  :root, body.theme-dark {
+    --bg: #0f1419; --panel: #161c25; --panel2: #1a212c; --line: #232b36;
+    --fg: #e2e8f0; --muted: #7d8794; --faint: #525c6b;
+    --accent: #4fd1c5; --new: #2dd4bf; --stale: #6b7280;
+    --rowH: #1b2230; --zebra: #12171f; --danger: #f87171;
+    --headerTop: #1b2330;
+  }
+  body.theme-dim {
+    --bg: #1b2129; --panel: #232a34; --panel2: #28303b; --line: #343d49;
+    --fg: #ccd4df; --muted: #818b99; --faint: #5d6675;
+    --accent: #4fd1c5; --new: #2dd4bf; --stale: #6b7280;
+    --rowH: #29313c; --zebra: #1f262f; --danger: #f87171;
+    --headerTop: #262f39;
+  }
+  body.theme-soft {
+    --bg: #dde2e8; --panel: #e9edf2; --panel2: #d4dae2; --line: #bfc7d1;
+    --fg: #2b333f; --muted: #5e6878; --faint: #8a94a3;
+    --accent: #0d9488; --new: #0f9d8f; --stale: #9aa3af;
+    --rowH: #e2e7ed; --zebra: #e6eaf0; --danger: #dc2626;
+    --headerTop: #e9edf2;
+  }
+  body.theme-light {
+    --bg: #f4f6f9; --panel: #ffffff; --panel2: #eaeef3; --line: #d7dde5;
+    --fg: #1a202c; --muted: #5b6675; --faint: #97a1b0;
+    --accent: #0d9488; --new: #0f9d8f; --stale: #9aa3af;
+    --rowH: #eef2f7; --zebra: #f1f4f8; --danger: #dc2626;
+    --headerTop: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); }
+  body {
+    margin: 0; color: var(--fg);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --- toolbar --- */
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, var(--headerTop), var(--panel));
+    position: sticky; top: 0; z-index: 3;
+  }
+  header h1 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: 0.3px; }
+  header h1 span { color: var(--accent); }
+  .range { color: var(--muted); font-size: 12px; }
+  .range b { color: var(--fg); font-weight: 600; }
+  .range.dim { opacity: 0.5; }
+  footer .paused-tag { color: var(--new); font-weight: 600; }
+  #pause, #privacy, #csv, #stop, #theme, .zoom button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    background: var(--bg); border: 1px solid var(--line); color: var(--fg);
+    padding: 7px; border-radius: 7px; font: inherit; font-size: 13px;
+    cursor: pointer; user-select: none;
+  }
+  #pause, #privacy, #csv, #stop, #theme { width: 31px; height: 31px; }
+  #pause { margin-left: auto; }
+  #pause:hover, #privacy:hover, #csv:hover, #theme:hover { border-color: var(--accent); }
+  #pause svg, #privacy svg, #csv svg, #stop svg, #theme svg { width: 15px; height: 15px; display: block; }
+
+  /* --- zoom control --- */
+  .zoom { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .zoom button {
+    border: none; border-radius: 0; padding: 6px 10px; font-size: 15px;
+    line-height: 1; min-width: 32px; justify-content: center;
+  }
+  .zoom button:hover { color: var(--accent); background: var(--panel2); }
+  .zoom #zoomLevel {
+    padding: 0 8px; min-width: 46px; text-align: center; color: var(--muted);
+    font-size: 12px; font-variant-numeric: tabular-nums; cursor: default; user-select: none;
+  }
+  #pause.paused { color: var(--new); border-color: var(--new); }
+  #privacy.on { color: #f0b866; border-color: #f0b866; }
+  #stop:hover { color: var(--danger); border-color: var(--danger); }
+  #stop.stopping { color: var(--danger); border-color: var(--danger); cursor: default; }
+  body.stopped { opacity: 0.6; }
+
+  /* Privacy mode: blur the trailing half of identifying hex — MAC, IPv6, and
+     serial numbers in names. IPv4 stays visible (private RFC1918 space). */
+  body.privacy .redact { filter: blur(3px); user-select: none; }
+  #search {
+    background: var(--bg); border: 1px solid var(--line);
+    color: var(--fg); padding: 6px 10px 6px 30px; border-radius: 7px; width: 260px; font: inherit;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%237d8794' stroke-width='2' stroke-linecap='round'><circle cx='7' cy='7' r='5'/><line x1='11' y1='11' x2='15' y2='15'/></svg>");
+    background-repeat: no-repeat; background-position: 9px center;
+  }
+  #search:focus { outline: none; border-color: var(--accent); }
+
+  /* --- table --- */
+  table { width: 100%; border-collapse: collapse; table-layout: auto; }
+  th, td { text-align: left; padding: 4px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+  /* Trailing spacer column soaks up leftover width so the real data columns
+     size to their content instead of spreading interior whitespace. */
+  th.spacer, td.spacer { width: 100%; padding: 0; border-bottom: 1px solid var(--line); cursor: default; }
+  th.spacer:hover { color: var(--muted); }
+  th {
+    position: sticky; top: 41px; background: var(--panel2); color: var(--muted);
+    font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px;
+    cursor: pointer; user-select: none; white-space: nowrap; padding-top: 7px; padding-bottom: 7px;
+  }
+  th:hover { color: var(--fg); }
+  th[data-k="ipv6"], th[data-k="first"], th[data-k="last"] { color: var(--faint); }
+  tbody tr:nth-child(even) td { background: var(--zebra); }
+  tbody tr:hover td { background: var(--rowH); }
+  td.ip { color: var(--accent); font-weight: 500; white-space: nowrap; }
+  .secip { display: block; color: var(--faint); font-size: 11px; }
+  td.mac { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .v6 { display: block; color: var(--faint); font-size: 11px; }
+  td.name { font-weight: 500; }
+  td.name .name, td.name .sub {
+    display: block; max-width: 200px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .name { color: var(--fg); }
+  td.category { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  td.comment { width: 180px; }
+  .note {
+    width: 170px; background: transparent; border: 1px solid transparent;
+    color: var(--fg); font: inherit; font-size: 12px; padding: 3px 6px;
+    border-radius: 5px; transition: border-color 0.12s, background 0.12s;
+  }
+  .note::placeholder { color: var(--faint); }
+  .note:hover { border-color: var(--line); }
+  .note:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+  .note.saved { border-color: var(--new); }
+  td.detection { white-space: nowrap; }
+  .det {
+    display: inline-flex; vertical-align: middle; margin-right: 7px;
+    color: var(--muted); cursor: default;
+  }
+  .det svg { width: 15px; height: 15px; display: block; }
+  .det:hover { color: var(--accent); }
+  .model { color: var(--faint); font-size: 11px; margin-left: 1px; vertical-align: middle; }
+  td.vendor { color: var(--muted); font-size: 12px; max-width: 260px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { color: var(--faint); font-size: 11px; display: block; }
+  .ago { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+  .online { background: var(--new); box-shadow: 0 0 6px var(--new); }
+  .offline { background: var(--stale); }
+  td.icon, td.status { text-align: center; width: 1%; white-space: nowrap; }
+  .icon svg { width: 17px; height: 17px; display: block; color: var(--muted); }
+  .empty { color: var(--muted); padding: 40px; text-align: center; }
+
+  /* Double-click any value cell to copy it; flash a brief confirmation. */
+  td.copyable { cursor: copy; }
+  td.copied { animation: copyflash 0.6s ease; }
+  @keyframes copyflash {
+    0% { background: var(--accent); color: var(--bg); }
+    100% { background: transparent; }
+  }
+
+  /* --- status bar --- */
+  footer {
+    position: sticky; bottom: 0; z-index: 3;
+    display: flex; align-items: center; gap: 14px;
+    padding: 6px 16px; border-top: 1px solid var(--line);
+    background: var(--panel); color: var(--muted); font-size: 12px;
+  }
+  footer .right { margin-left: auto; }
+  footer b { color: var(--fg); font-weight: 600; }
+  footer .live { color: var(--new); }
+</style>
+</head>
+<body>
+<header>
+  <h1>net<span>watch</span></h1>
+  <div class="range" id="range">scanning…</div>
+  <button id="pause" type="button" title="Pause scanning" aria-label="Pause scanning" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"></svg>
+  </button>
+  <button id="stop" type="button" title="Stop the netwatch server" aria-label="Stop the netwatch server">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+  </button>
+  <div class="zoom" role="group" aria-label="Zoom">
+    <button id="zoomOut" type="button" title="Decrease font size" aria-label="Zoom out">&minus;</button>
+    <span id="zoomLevel" title="Reset to 100% · click again to fit all columns">100%</span>
+    <button id="zoomIn" type="button" title="Increase font size" aria-label="Zoom in">+</button>
+  </div>
+  <button id="theme" type="button" title="Switch to light theme" aria-label="Switch to light theme" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"></svg>
+  </button>
+  <button id="privacy" type="button" title="Privacy: blur MAC / IP / serial numbers for screenshots" aria-label="Privacy: blur identifying fields" aria-pressed="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"></svg>
+  </button>
+  <button id="csv" type="button" title="Download the current view as CSV" aria-label="Download the current view as CSV">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+  </button>
+  <input id="search" type="search" placeholder="filter ip / name / mac / vendor / type…" autocomplete="off">
+</header>
+
+<table>
+  <thead>
+    <tr>
+      <th data-k="category" title="Device type"></th>
+      <th data-k="status"></th>
+      <th data-k="ipv4">IPv4</th>
+      <th data-k="name">Name</th>
+      <th data-k="category">Category</th>
+      <th data-k="detection">Detection</th>
+      <th data-k="vendor">Vendor</th>
+      <th data-k="mac">MAC</th>
+      <th data-k="ipv6">IPv6</th>
+      <th data-k="comment">Notes</th>
+      <th data-k="first">First seen</th>
+      <th data-k="last">Last seen</th>
+      <th class="spacer" aria-hidden="true"></th>
+    </tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+<div id="empty" class="empty">Scanning the local network…</div>
+
+<footer>
+  <span><b id="count">0</b> devices</span>
+  <span><span class="live">●</span> <b id="online">0</b> online</span>
+  <span class="right">updated <b id="updated">—</b></span>
+  <span id="status"></span>
+</footer>
+
+<script>
+let hosts = [], sortKey = "ipv4", sortDir = 1, filter = "";
+const rowEls = new Map(); // host key -> { tr, cells, h }
+
+const $ = (id) => document.getElementById(id);
+
+// --- Category icons (inline SVG, Lucide-style, themeable via currentColor) ---
+const ICON_PATHS = {
+  wifi:     '<path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.8a15 15 0 0 1 20 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>',
+  music:    '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  computer: '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
+  phone:    '<rect x="6" y="2" width="12" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
+  tablet:   '<rect x="4" y="2" width="16" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
+  tv:       '<rect x="2" y="7" width="20" height="13" rx="2"/><polyline points="7 3 12 7 17 3"/>',
+  printer:  '<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  camera:   '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>',
+  nas:      '<rect x="2" y="4" width="20" height="6" rx="2"/><rect x="2" y="14" width="20" height="6" rx="2"/><line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/>',
+  iot:      '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>',
+  gateway:  '<rect x="2" y="14" width="20" height="6" rx="2"/><line x1="6" y1="17" x2="6.01" y2="17"/><line x1="10" y1="17" x2="10.01" y2="17"/><path d="M7 14V9a5 5 0 0 1 10 0v5"/>',
+  irrigation: '<path d="M7 16.3c2.2 0 4-1.83 4-4.05 0-1.16-.57-2.26-1.71-3.19S7.29 6.75 7 5.3c-.29 1.45-1.14 2.84-2.29 3.76S3 11.1 3 12.25c0 2.22 1.8 4.05 4 4.05z"/><path d="M12.56 6.6A11 11 0 0 0 14 3.02c.5 2.5 2 4.9 4 6.5s3 3.5 3 5.5a6.98 6.98 0 0 1-11.91 4.97"/>',
+  ac:       '<rect x="2" y="3" width="20" height="9" rx="2"/><path d="M2 8h20"/><path d="M17.5 17.5a2.5 2.5 0 1 1-3.5 3 2.5 2.5 0 0 1-1-2V12"/><path d="M6.6 15.6A2 2 0 1 0 10 17v-5"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  console:  '<line x1="6" y1="11" x2="10" y2="11"/><line x1="8" y1="9" x2="8" y2="13"/><line x1="15" y1="12" x2="15.01" y2="12"/><line x1="18" y1="10" x2="18.01" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.544-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/>',
+  meshtastic: '<path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/>',
+  vmlxc:    '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+  unknown:  '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+};
+const CATEGORY_LABELS = {
+  wifi: "Wi-Fi / access point", music: "Speaker / media", computer: "Computer",
+  phone: "Phone", tablet: "Tablet", tv: "TV / streamer", printer: "Printer",
+  camera: "Camera", nas: "NAS", iot: "IoT device", gateway: "Gateway / router",
+  irrigation: "Irrigation / sprinkler", ac: "Air conditioner", calendar: "Calendar / display",
+  console: "Game console", meshtastic: "Meshtastic node", vmlxc: "VM / LXC",
+  unknown: "Unknown",
+};
+
+// Friendly labels for the DNS-SD service types we browse for. Used to render
+// the Detection column as human-readable protocol tags (e.g. "_airplay._tcp"
+// → "AirPlay") instead of raw service strings.
+const SERVICE_LABELS = {
+  "_airplay": "AirPlay", "_raop": "AirPlay Audio", "_companion-link": "Companion",
+  "_rdlink": "Continuity", "_googlecast": "Cast", "_spotify-connect": "Spotify",
+  "_sonos": "Sonos", "_ipp": "Printer", "_printer": "Printer",
+  "_pdl-datastream": "Printer", "_hap": "HomeKit", "_meshtastic": "Meshtastic", "_device-info": "",
+};
+function serviceLabel(svc) {
+  const base = svc.replace(/\._(tcp|udp)$/, "");
+  if (base in SERVICE_LABELS) return SERVICE_LABELS[base];
+  return base.replace(/^_/, "");
+}
+
+// Small Lucide-style glyphs for each detected protocol. Rendered ~15px in the
+// Detection column; the protocol name is exposed on hover via a title tooltip.
+const DETECTION_ICONS = {
+  "AirPlay":       '<path d="M5 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1"/><polygon points="12 15 17 21 7 21 12 15"/>',
+  "AirPlay Audio": '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+  "Cast":          '<path d="M2 16.1A5 5 0 0 1 5.9 20M2 12.05A9 9 0 0 1 9.95 20M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/><line x1="2" y1="20" x2="2.01" y2="20"/>',
+  "Spotify":       '<circle cx="12" cy="12" r="2"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49M16.24 7.76a6 6 0 0 1 0 8.49M4.93 19.07a10 10 0 0 1 0-14.14M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+  "Sonos":         '<rect x="4" y="2" width="16" height="20" rx="2"/><circle cx="12" cy="14" r="4"/><line x1="12" y1="6" x2="12.01" y2="6"/>',
+  "Printer":       '<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  "HomeKit":       '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+  "Companion":     '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  "Continuity":    '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  "Meshtastic":    '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
+  "Proxmox":       '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+  "_default":      '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
+};
+function detIconSVG(label) {
+  const p = DETECTION_ICONS[label] || DETECTION_ICONS._default;
+  return `<span class="det" title="${esc(label)}" aria-label="${esc(label)}"><svg viewBox="0 0 24 24" fill="none" `
+    + `stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg></span>`;
+}
+// detectionTags returns the de-duplicated, human-readable protocol tags a host
+// advertised over DNS-SD, in stable first-seen order.
+function detectionTags(h) {
+  const seen = new Set(), tags = [];
+  // A Proxmox OUI on the NIC means the host is a Proxmox VM/LXC guest — surface
+  // that as a vendor-derived detection tag alongside the DNS-SD protocols.
+  if (/proxmox/i.test(h.vendor || "")) { seen.add("Proxmox"); tags.push("Proxmox"); }
+  for (const svc of (h.mdns_services || [])) {
+    const label = serviceLabel(svc);
+    if (label && !seen.has(label)) { seen.add(label); tags.push(label); }
+  }
+  return tags;
+}
+
+function iconSVG(cat) {
+  const c = ICON_PATHS[cat] ? cat : "unknown";
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+    stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[c]}</svg>`;
+}
+
+function ip4key(h) {
+  const ip = (h.ipv4 || [])[0] || "";
+  return ip.split(".").map(n => n.padStart(3, "0")).join(".");
+}
+function primaryName(h) {
+  const base = h.mdns_name || h.hostname || "";
+  return base ? decorateAudioName(h, base) : "";
+}
+
+// decorateAudioName turns a bare RAOP room label into a richer
+// "<Vendor> <Model>: <Room>" name — e.g. a Sonos that advertises the room
+// "Bedroom" (from its _raop "<mac>@<room>" instance) and model "Amp" (the _raop
+// "am=" TXT) becomes "Sonos Amp: Bedroom". It applies only to AirPlay-Audio
+// (_raop) speakers reporting a product-name model; Apple's comma-style model
+// identifiers (e.g. "AudioAccessory5,1") are left alone so HomePods etc. keep
+// their plain room name.
+function decorateAudioName(h, base) {
+  if (!nameIncludesModel(h)) return base;
+  const model = h.mdns_model;
+  const vendor = (h.vendor || "").split(",")[0].trim().split(/\s+/)[0];
+  const label = (vendor && !new RegExp("^" + vendor, "i").test(model)) ? `${vendor} ${model}` : model;
+  // No room name discovered yet: the base is still a bare device id like
+  // "Sonos-48A6B80428A3", which only repeats the vendor/MAC already shown in
+  // their own columns. Show just "<Vendor> <Model>" (e.g. "Sonos Arc") until
+  // the RAOP room name ("<mac>@<room>") arrives.
+  if (looksLikeDeviceId(base)) return label;
+  return base.startsWith(label) ? base : `${label}: ${base}`;
+}
+
+// nameIncludesModel reports whether the composed Name already folds in the
+// device model (see decorateAudioName) — true for AirPlay-Audio (_raop)
+// speakers reporting a product-name model. The Detection column uses this to
+// drop the now-redundant model tag (e.g. a Sonos shows "One SL" only in Name).
+function nameIncludesModel(h) {
+  const model = h.mdns_model || "";
+  const isRaop = (h.mdns_services || []).some(s => s.startsWith("_raop"));
+  return !!model && !model.includes(",") && isRaop;
+}
+
+// looksLikeDeviceId reports whether a name is a bare hardware identifier (e.g.
+// "Sonos-48A6B80428A3") rather than a user-chosen room: a space-free token that
+// contains both a long run of hex digits and at least one numeral.
+function looksLikeDeviceId(name) {
+  return !/\s/.test(name) && /[0-9a-f]{6,}/i.test(name) && /\d/.test(name);
+}
+function ago(ts) {
+  if (!ts) return "—";
+  const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  if (s < 60) return Math.floor(s) + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+function isOnline(h) { return (Date.now() - new Date(h.last_seen).getTime()) < 90000; }
+function esc(s) { return (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+// wrapTail wraps the trailing half of an already-escaped token in a .redact
+// span (keeping the leading half visible) so privacy mode can blur it.
+function wrapTail(token) {
+  const keep = Math.ceil(token.length / 2);
+  return token.slice(0, keep) + `<span class="redact">${token.slice(keep)}</span>`;
+}
+
+// redactHexName masks the trailing ~50% of long hex-digit runs (serial numbers
+// and suffixes like "Sonos-C4387554" or "NPI073022") while leaving the readable
+// part of a name intact. Only runs longer than 4 hex chars that contain at
+// least one numeral are touched — the numeral guard avoids blurring ordinary
+// words that happen to be all hex letters (e.g. "facade"). Input must already
+// be HTML-escaped.
+function redactHexName(escaped) {
+  return escaped.replace(/[0-9a-f]{5,}/gi, m => (/\d/.test(m) ? wrapTail(m) : m));
+}
+
+// redactHexTail blurs the trailing half of a colon-separated hex identifier,
+// keeping the leading half readable. Used for MACs (reveals the vendor OUI
+// prefix, already shown in the Vendor column) and IPv6 addresses (reveals the
+// network prefix, blurs the device interface-ID half).
+function redactHexTail(raw) {
+  const e = esc(raw);
+  const digits = (e.match(/[0-9a-f]/gi) || []).length;
+  if (digits <= 4) return e;
+  const keep = Math.ceil(digits / 2);
+  let seen = 0, cut = e.length;
+  for (let i = 0; i < e.length; i++) {
+    if (/[0-9a-f]/i.test(e[i]) && ++seen > keep) { cut = i; break; }
+  }
+  return e.slice(0, cut) + `<span class="redact">${e.slice(cut)}</span>`;
+}
+
+// scanRange derives the dominant /24 from the observed IPv4 addresses and
+// reports its usable host span (x.y.z.1 – x.y.z.254) for the header.
+function scanRange(list) {
+  const counts = {};
+  for (const h of list) for (const ip of (h.ipv4 || [])) {
+    const m = ip.match(/^(\d+\.\d+\.\d+)\.\d+$/);
+    if (m) counts[m[1]] = (counts[m[1]] || 0) + 1;
+  }
+  let best = "", n = -1;
+  for (const k in counts) if (counts[k] > n) { n = counts[k]; best = k; }
+  return best ? `${best}.0/24 (1-254)` : "";
+}
+
+const sorters = {
+  category: h => CATEGORY_LABELS[h.category] || "zzz",
+  detection: h => detectionTags(h).join(",").toLowerCase() || "zzz",
+  status: h => isOnline(h) ? 0 : 1,
+  ipv4: ip4key,
+  name: h => primaryName(h).toLowerCase() || "zzz",
+  comment: h => (h.comment || "").toLowerCase() || "zzz",
+  vendor: h => (h.vendor || "").toLowerCase(),
+  mac: h => h.mac || "",
+  ipv6: h => ((h.ipv6_global || [])[0] || (h.ipv6_local || [])[0] || ""),
+  first: h => new Date(h.first_seen).getTime(),
+  last: h => new Date(h.last_seen).getTime(),
+};
+
+// setHTML / setText only touch the DOM when the value actually changes, so
+// unchanged cells are never rewritten (no reflow, no lost selection/hover).
+function setHTML(cell, html) { if (cell._h !== html) { cell._h = html; cell.innerHTML = html; } }
+function setText(cell, text) { if (cell._t !== text) { cell._t = text; cell.textContent = text; } }
+function setClass(node, cls) { if (node._c !== cls) { node._c = cls; node.className = cls; } }
+
+function makeRow(h) {
+  const tr = document.createElement("tr");
+  tr.dataset.key = h.key;
+  const td = (cls) => { const c = document.createElement("td"); if (cls) c.className = cls; return c; };
+  const cells = {
+    icon: td("icon"), status: td("status"), ip: td("ip mono copyable"), name: td("name copyable"),
+    comment: td("comment"), category: td("category copyable"), detection: td("detection copyable"),
+    vendor: td("vendor copyable"), mac: td("mac mono copyable"), ipv6: td("ipv6 copyable"),
+    first: td("ago copyable"), last: td("ago copyable"),
+  };
+  const dot = document.createElement("span");
+  cells.status.appendChild(dot);
+
+  // Editable note: a persistent input so typing is never clobbered by polling.
+  const note = document.createElement("input");
+  note.type = "text";
+  note.className = "note";
+  note.placeholder = "add note…";
+  note.maxLength = 256;
+  note.addEventListener("keydown", e => { if (e.key === "Enter") note.blur(); else if (e.key === "Escape") { note.value = note._saved || ""; note.blur(); } });
+  note.addEventListener("change", () => saveNote(tr.dataset.key, note));
+  cells.comment.appendChild(note);
+
+  tr.append(cells.icon, cells.status, cells.ip, cells.name, cells.category,
+    cells.detection, cells.vendor, cells.mac, cells.ipv6, cells.comment, cells.first, cells.last,
+    td("spacer"));
+  return { tr, cells, dot, note, h };
+}
+
+// updateData patches the data-derived cells (everything except the live
+// online-dot and relative timestamps, which the cosmetic tick handles).
+function updateData(row, h) {
+  row.h = h;
+  const c = row.cells;
+  const known = h.category && CATEGORY_LABELS[h.category];
+  const cat = known ? h.category : "unknown";
+  setHTML(c.icon, iconSVG(cat));
+  c.icon.title = known ? CATEGORY_LABELS[h.category] : "";
+
+  const ipHTML = ((h.ipv4 || []).map(esc).join("<br>") || "—") +
+    (h.secondary_ips || []).map(x => `<span class="secip" title="outside scanned subnet">${esc(x)}</span>`).join("");
+  setHTML(c.ip, ipHTML);
+
+  // Name: the actual resolved identity (mDNS instance name or reverse-DNS
+  // host name). Left blank when unknown — no placeholder text.
+  const name = primaryName(h);
+  const nameHTML = name
+    ? `<span class="name">${redactHexName(esc(name))}</span>` +
+        (h.mdns_name && h.hostname && h.mdns_name !== h.hostname ? `<span class="sub">${redactHexName(esc(h.hostname))}</span>` : "")
+    : "<span class='sub'>—</span>";
+  setHTML(c.name, nameHTML);
+  c.name.title = name;
+
+  // Category: the derived device class, blank when we couldn't classify it.
+  setHTML(c.category, known
+    ? `<span class="cat">${esc(CATEGORY_LABELS[h.category])}</span>`
+    : "<span class='sub'>—</span>");
+
+  // Detection: device-specific evidence learned over DNS-SD — the advertised
+  // protocols (AirPlay, HomeKit, Printer…) plus the reported hardware model.
+  const tags = detectionTags(h);
+  let detHTML = tags.map(detIconSVG).join("");
+  if (h.mdns_model && !nameIncludesModel(h)) detHTML += `<span class="model" title="DNS-SD model=${esc(h.mdns_model)}">${esc(h.mdns_model)}</span>`;
+  setHTML(c.detection, detHTML || "<span class='sub'>—</span>");
+
+  // Notes: keep the input in sync with the server, but never overwrite text
+  // the user is actively editing (focused) or has pending unsaved local edits.
+  const note = row.note;
+  const serverComment = h.comment || "";
+  if (document.activeElement !== note && note._saved !== serverComment) {
+    note.value = serverComment;
+    note._saved = serverComment;
+    note.classList.remove("saved");
+  }
+
+  setHTML(c.vendor, esc(h.vendor) || "<span class='sub'>—</span>");
+  setHTML(c.mac, h.mac ? redactHexTail(h.mac) : "—");
+
+  const v6 = [...(h.ipv6_global || []), ...(h.ipv6_local || [])];
+  setHTML(c.ipv6, v6.length ? v6.map(x => `<span class="v6 mono">${redactHexTail(x)}</span>`).join("") : "<span class='sub'>—</span>");
+
+  c.first.title = h.first_seen || "";
+  c.last.title = h.last_seen || "";
+}
+
+// updateCosmetic refreshes only the online dot and the relative "ago" text from
+// the row's stored timestamps — no network fetch needed, so it can tick fast.
+function updateCosmetic(row) {
+  const h = row.h;
+  setClass(row.dot, "dot " + (isOnline(h) ? "online" : "offline"));
+  setText(row.cells.first, ago(h.first_seen));
+  setText(row.cells.last, ago(h.last_seen));
+}
+
+// saveNote persists an edited note to the server. The note is stored against
+// the host's record (keyed by MAC when known), so it follows the device even
+// if its IP changes. Updates the local cache so the next poll won't revert it.
+async function saveNote(key, note) {
+  const value = note.value.trim();
+  if (value === (note._saved || "")) return; // nothing changed
+  try {
+    const r = await fetch("/api/comment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, comment: value }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    note._saved = value;
+    note.value = value;
+    const h = hosts.find(x => x.key === key);
+    if (h) h.comment = value;
+    note.classList.add("saved");
+    setTimeout(() => note.classList.remove("saved"), 900);
+    if (document.body.classList.contains("privacy")) render(); // may hide a newly-#private# row
+  } catch (e) {
+    $("status").textContent = " · note save failed";
+    note.value = note._saved || ""; // revert on failure
+  }
+}
+
+function filterSort() {
+  const f = filter.toLowerCase();
+  // Privacy mode hides any host whose note is exactly "#private#".
+  const privacyOn = document.body.classList.contains("privacy");
+  let list = hosts.filter(h => {
+    if (privacyOn && (h.comment || "").trim() === "#private#") return false;
+    if (!f) return true;
+    const hay = [...(h.ipv4 || []), ...(h.secondary_ips || []), ...(h.ipv6_global || []),
+      ...(h.ipv6_local || []), h.mac, h.vendor, h.hostname, h.mdns_name, h.mdns_model,
+      h.category, CATEGORY_LABELS[h.category], h.comment, ...detectionTags(h)].join(" ").toLowerCase();
+    return hay.includes(f);
+  });
+  const sorter = sorters[sortKey] || sorters.ipv4;
+  list.sort((a, b) => {
+    const x = sorter(a), y = sorter(b);
+    return (x < y ? -1 : x > y ? 1 : 0) * sortDir;
+  });
+  return list;
+}
+
+// render reconciles the existing <tr> nodes against the new sorted list: it
+// reuses rows by host key, patches only changed cells, reorders by moving
+// nodes, and removes only rows that actually disappeared.
+function render() {
+  const list = filterSort();
+  const tbody = $("rows");
+  const seen = new Set();
+  let prev = null;
+  for (const h of list) {
+    seen.add(h.key);
+    let row = rowEls.get(h.key);
+    if (!row) { row = makeRow(h); rowEls.set(h.key, row); }
+    updateData(row, h);
+    updateCosmetic(row);
+    const anchor = prev ? prev.nextSibling : tbody.firstChild;
+    if (anchor !== row.tr) tbody.insertBefore(row.tr, anchor);
+    prev = row.tr;
+  }
+  for (const [k, row] of rowEls) {
+    if (!seen.has(k)) { row.tr.remove(); rowEls.delete(k); }
+  }
+  $("empty").style.display = list.length ? "none" : "block";
+  $("empty").textContent = hosts.length ? "No hosts match your filter." : "Scanning the local network…";
+}
+
+function tickCosmetic() {
+  for (const row of rowEls.values()) updateCosmetic(row);
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/hosts");
+    const data = await r.json();
+    hosts = data.hosts || [];
+    $("count").textContent = data.count;
+    $("online").textContent = hosts.filter(isOnline).length;
+    const range = scanRange(hosts);
+    $("range").innerHTML = range ? `Local Network Scan <b>${range}</b>` : "scanning…";
+    $("updated").textContent = new Date(data.generated_at).toLocaleTimeString();
+    $("status").textContent = "";
+    setPauseUI(!!data.paused);
+    render();
+  } catch (e) {
+    $("status").textContent = " · connection lost";
+  }
+}
+
+document.querySelectorAll("th[data-k]").forEach(th => {
+  th.addEventListener("click", () => {
+    const k = th.dataset.k;
+    if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = 1; }
+    render();
+  });
+});
+$("search").addEventListener("input", e => { filter = e.target.value; render(); });
+
+// --- Double-click a value cell to copy it to the clipboard ---
+// The "ago" cells copy the full ISO timestamp (their title) rather than the
+// relative "5m ago" text; everything else copies its displayed value.
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  }
+  return Promise.resolve(fallbackCopy(text));
+}
+function fallbackCopy(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } catch (e) {}
+  ta.remove();
+}
+document.querySelector("table").addEventListener("dblclick", e => {
+  const cell = e.target.closest("td.copyable");
+  if (!cell) return;
+  const text = (cell.classList.contains("ago") && cell.title)
+    ? cell.title
+    : (cell.innerText || "").trim();
+  if (!text || text === "—") return;
+  copyText(text);
+  cell.classList.remove("copied");
+  void cell.offsetWidth; // restart the flash animation
+  cell.classList.add("copied");
+  setTimeout(() => cell.classList.remove("copied"), 700);
+});
+
+// --- Pause / resume scanning ---
+const PAUSE_ICON = '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>';
+const PLAY_ICON = '<polygon points="6 4 20 12 6 20 6 4"/>';
+let paused = false;
+
+// setPauseUI reflects the server's authoritative scan state on the button so
+// every open tab stays in sync after each poll.
+function setPauseUI(p) {
+  paused = p;
+  const btn = $("pause");
+  btn.querySelector("svg").innerHTML = p ? PLAY_ICON : PAUSE_ICON;
+  btn.title = p ? "Resume scanning" : "Pause scanning";
+  btn.setAttribute("aria-label", btn.title);
+  btn.setAttribute("aria-pressed", String(p));
+  btn.classList.toggle("paused", p);
+  $("range").classList.toggle("dim", p);
+  $("status").innerHTML = p ? ' · <span class="paused-tag">scanning paused</span>' : "";
+}
+
+// --- Privacy mode (client-only; blurs identifying fields for screenshots) ---
+const EYE_ICON = '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>';
+const EYE_OFF_ICON = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
+function setPrivacy(on) {
+  document.body.classList.toggle("privacy", on);
+  const btn = $("privacy");
+  btn.classList.toggle("on", on);
+  btn.querySelector("svg").innerHTML = on ? EYE_OFF_ICON : EYE_ICON;
+  btn.setAttribute("aria-pressed", String(on));
+  try { localStorage.setItem("nw-privacy", on ? "1" : "0"); } catch (e) {}
+  render(); // re-evaluate which rows are hidden by privacy mode
+}
+$("privacy").addEventListener("click", () => setPrivacy(!document.body.classList.contains("privacy")));
+setPrivacy((() => { try { return localStorage.getItem("nw-privacy") === "1"; } catch (e) { return false; } })());
+
+// --- Global zoom (client-only; scales the whole UI via CSS zoom) ---
+const ZOOM_MIN = 0.6, ZOOM_MAX = 2.0, ZOOM_STEP = 0.1, ZOOM_FIT_MIN = 0.4;
+let zoom = 1;
+function applyZoom(z) {
+  zoom = Math.round(z * 100) / 100;
+  document.body.style.zoom = zoom;
+  $("zoomLevel").textContent = Math.round(zoom * 100) + "%";
+  try { localStorage.setItem("nw-zoom", String(zoom)); } catch (e) {}
+}
+function setZoom(z) { applyZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z))); }
+
+// fitZoom scales the UI so every column fits within the window. The data
+// columns size to their content (the trailing spacer absorbs slack), so the
+// sum of the real header-cell widths — measured unscaled — is the natural
+// table width we need to fit into the viewport.
+function fitZoom() {
+  document.body.style.zoom = 1; // neutralize zoom so measurements are 1:1
+  const cols = [...document.querySelectorAll("thead th")].filter(t => !t.classList.contains("spacer"));
+  const content = cols.reduce((sum, t) => sum + t.offsetWidth, 0);
+  const avail = document.documentElement.clientWidth - 4; // small breathing margin
+  const z = content > 0 ? avail / content : 1;
+  applyZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_FIT_MIN, z)));
+}
+$("zoomIn").addEventListener("click", () => setZoom(zoom + ZOOM_STEP));
+$("zoomOut").addEventListener("click", () => setZoom(zoom - ZOOM_STEP));
+// Click the readout to reset to 100%; click again (when already at 100%) to fit.
+$("zoomLevel").addEventListener("click", () => {
+  if (Math.abs(zoom - 1) < 0.005) fitZoom(); else setZoom(1);
+});
+setZoom((() => { try { return parseFloat(localStorage.getItem("nw-zoom")) || 1; } catch (e) { return 1; } })());
+
+// --- Theme (client-only): four brightness steps, darkest → lightest. ---
+// Clicking ping-pongs through them (dark → dim → soft → light → soft → …) so
+// each click is one small, reversible step instead of a jarring dark/light flip.
+const THEMES = [
+  { cls: "theme-dark",  label: "Dark" },
+  { cls: "theme-dim",   label: "Medium dark" },
+  { cls: "theme-soft",  label: "Medium light" },
+  { cls: "theme-light", label: "Light" },
+];
+// A brightness "dial": a ring whose interior fills as the theme lightens —
+// empty at Dark, full at Light — so the four steps read as one ordered scale
+// and a ping-pong click visibly fills, then drains, the disc.
+function themeIcon(idx) {
+  const f = idx / (THEMES.length - 1);   // 0 → 1 lit fraction
+  const w = (18 * f).toFixed(2);         // fill width inside the r=9 circle
+  return '<defs><clipPath id="tdial"><circle cx="12" cy="12" r="9"/></clipPath></defs>'
+    + `<g clip-path="url(#tdial)"><rect x="3" y="3" width="${w}" height="18" fill="currentColor" stroke="none"/></g>`
+    + '<circle cx="12" cy="12" r="9" fill="none"/>';
+}
+let themeIdx = 0, themeDir = 1;
+function setTheme(idx) {
+  themeIdx = Math.min(THEMES.length - 1, Math.max(0, idx));
+  // Keep the bounce direction sane after a direct set (e.g. on load).
+  if (themeIdx >= THEMES.length - 1) themeDir = -1;
+  else if (themeIdx <= 0) themeDir = 1;
+  document.body.classList.remove(...THEMES.map(t => t.cls));
+  document.body.classList.add(THEMES[themeIdx].cls);
+  const btn = $("theme");
+  btn.querySelector("svg").innerHTML = themeIcon(themeIdx);
+  btn.title = `Theme: ${THEMES[themeIdx].label} — click to cycle brightness`;
+  btn.setAttribute("aria-label", btn.title);
+  btn.setAttribute("aria-pressed", String(themeIdx >= THEMES.length / 2));
+  try { localStorage.setItem("nw-theme", String(themeIdx)); } catch (e) {}
+}
+$("theme").addEventListener("click", () => {
+  let next = themeIdx + themeDir;
+  if (next < 0 || next > THEMES.length - 1) { themeDir *= -1; next = themeIdx + themeDir; }
+  setTheme(next);
+});
+setTheme((() => {
+  try {
+    const v = localStorage.getItem("nw-theme");
+    if (v === "light") return THEMES.length - 1; // migrate old string values
+    if (v === "dark" || v === null) return 0;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : 0;
+  } catch (e) { return 0; }
+})());
+
+$("pause").addEventListener("click", async () => {
+  // Optimistic flip for instant feedback; the response confirms the truth.
+  setPauseUI(!paused);
+  try {
+    const r = await fetch("/api/scan?action=toggle", { method: "POST" });
+    const data = await r.json();
+    setPauseUI(!!data.paused);
+  } catch (e) {
+    $("status").textContent = " · scan toggle failed";
+  }
+});
+
+// --- CSV export (client-only; mirrors the current filtered + sorted view) ---
+// csvCell quotes a field per RFC 4180 — always wrapped so embedded commas,
+// quotes, and newlines survive intact in Excel / Numbers / spreadsheets.
+function csvCell(v) {
+  const s = (v == null ? "" : String(v));
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+
+const CSV_COLUMNS = [
+  ["Status",       h => isOnline(h) ? "online" : "offline"],
+  ["Category",     h => CATEGORY_LABELS[h.category] || ""],
+  ["IPv4",         h => (h.ipv4 || []).join(" ")],
+  ["Secondary IPs",h => (h.secondary_ips || []).join(" ")],
+  ["Name",         h => primaryName(h)],
+  ["Notes",        h => h.comment || ""],
+  ["Hostname",     h => h.hostname || ""],
+  ["mDNS Name",    h => h.mdns_name || ""],
+  ["Detection",    h => detectionTags(h).join(" ")],
+  ["Model",        h => h.mdns_model || ""],
+  ["Vendor",       h => h.vendor || ""],
+  ["MAC",          h => h.mac || ""],
+  ["IPv6",         h => [...(h.ipv6_global || []), ...(h.ipv6_local || [])].join(" ")],
+  ["First Seen",   h => h.first_seen || ""],
+  ["Last Seen",    h => h.last_seen || ""],
+];
+
+function buildCSV() {
+  const list = filterSort();
+  const lines = [CSV_COLUMNS.map(c => csvCell(c[0])).join(",")];
+  for (const h of list) lines.push(CSV_COLUMNS.map(c => csvCell(c[1](h))).join(","));
+  return lines.join("\r\n");
+}
+
+$("csv").addEventListener("click", () => {
+  const blob = new Blob([buildCSV()], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `netwatch-${ts}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+});
+
+// --- Stop the server ---
+// Once stopped, suppress the periodic refresh's "connection lost" noise and
+// show a clear terminal state instead — the backend is gone for good.
+let stopped = false;
+$("stop").addEventListener("click", async () => {
+  if (stopped) return;
+  if (!confirm("Stop the netwatch server? This shuts down the process and ends the scan.")) return;
+  stopped = true;
+  const btn = $("stop");
+  btn.classList.add("stopping");
+  btn.title = "Stopping…";
+  btn.setAttribute("aria-label", btn.title);
+  try {
+    await fetch("/api/shutdown", { method: "POST" });
+  } catch (e) {
+    // Expected: the server may drop the connection mid-shutdown.
+  }
+  document.body.classList.add("stopped");
+  btn.title = "Server stopped";
+  btn.setAttribute("aria-label", btn.title);
+  $("range").textContent = "server stopped";
+  $("range").classList.add("dim");
+  $("status").innerHTML = ' · <span class="paused-tag">server stopped</span>';
+});
+
+refresh();
+setInterval(() => { if (!stopped) refresh(); }, 5000);   // data refresh
+setInterval(tickCosmetic, 1000); // relative-time + online dot, no fetch
+</script>
+</body>
+</html>

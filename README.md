@@ -66,7 +66,7 @@ From the repository root:
 go run ./cmd/netwatch
 ```
 
-Then open the UI at [http://localhost:8080](http://localhost:8080).
+Then open the UI at [http://localhost:9911](http://localhost:9911).
 
 Alternatively, build a binary first:
 
@@ -82,7 +82,7 @@ Press `Ctrl-C` to stop the server.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-iface` | auto-detect | Network interface to scan |
-| `-listen` | `:8080` | HTTP listen address |
+| `-listen` | `:9911` | HTTP listen address |
 | `-interval` | `30s` | Rescan interval |
 | `-ping-timeout` | `2s` | Ping sweep reply window |
 | `-mdns-wait` | `2s` | mDNS listen window |
@@ -130,9 +130,9 @@ Linux via `ip neigh`.
 
 ### Security note
 
-netwatch has no authentication and, by default, binds all interfaces (`:8080`),
+netwatch has no authentication and, by default, binds all interfaces (`:9911`),
 exposing the full inventory to anyone who can reach the port. Treat it as a
-trusted-LAN tool: bind it to loopback with `-listen 127.0.0.1:8080`, or put it
+trusted-LAN tool: bind it to loopback with `-listen 127.0.0.1:9911`, or put it
 behind a reverse proxy / firewall if you need to reach it remotely.
 
 ### Tests

@@ -78,6 +78,82 @@ func TestReKeyFromIPToMAC(t *testing.T) {
 	}
 }
 
+// A dual-homed monitor host can create an IP-keyed orphan (an mDNS/DNS-SD reply
+// observed before ARP resolves the sender) after the device's MAC record already
+// exists. A later observation carrying both MAC and that IP must fold the orphan
+// in rather than leaving two rows for one device.
+func TestOrphanFoldedAfterMACExists(t *testing.T) {
+	s := New()
+	mac := "aa:bb:cc:00:11:22"
+	ip := "192.168.7.109"
+
+	// MAC record is established first (e.g. seeded from the ARP table).
+	s.Upsert(Observation{MAC: mac, IPv4: []string{ip}, Vendor: "Espressif"})
+	// Then a name-only mDNS observation arrives with no MAC → IP-keyed orphan.
+	s.Upsert(Observation{IPv4: []string{ip}, MDNSName: "shellydimmer2-C45BBE56DE9D"})
+	if n := len(s.Snapshot()); n != 2 {
+		t.Fatalf("precondition: got %d hosts, want 2 (MAC record + orphan)", n)
+	}
+
+	// A subsequent scan sees both MAC and IP again: the orphan must be absorbed.
+	s.Upsert(Observation{MAC: mac, IPv4: []string{ip}})
+
+	hosts := s.Snapshot()
+	if len(hosts) != 1 {
+		t.Fatalf("got %d hosts, want 1 after orphan folded in", len(hosts))
+	}
+	h := hosts[0]
+	if h.Key != mac {
+		t.Errorf("key = %q, want MAC", h.Key)
+	}
+	if h.MDNSName != "shellydimmer2-C45BBE56DE9D" {
+		t.Errorf("MDNSName = %q, want the name learned while orphaned", h.MDNSName)
+	}
+	if len(h.IPv4) != 1 || h.IPv4[0] != ip {
+		t.Errorf("IPv4 = %v, want [%s]", h.IPv4, ip)
+	}
+}
+
+func TestReconcileOrphans(t *testing.T) {
+	s := New()
+	t0 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	// Simulate a DB persisted by an older version: a MAC-keyed host and a
+	// separate IP-keyed orphan for one of its IPs, plus a genuinely unresolved
+	// host that must be left alone.
+	s.Restore([]Host{
+		{Key: "aa:bb:cc:dd:ee:01", MAC: "aa:bb:cc:dd:ee:01", IPv4: []string{"192.168.7.197"}, FirstSeen: t0, LastSeen: t0},
+		{Key: "192.168.7.197", IPv4: []string{"192.168.7.197"}, MDNSName: "Garage Door 4AE53A", Comment: "note", FirstSeen: t0.Add(-time.Hour), LastSeen: t0.Add(time.Hour)},
+		{Key: "192.168.7.250", IPv4: []string{"192.168.7.250"}}, // no MAC owner anywhere
+	})
+
+	if n := s.ReconcileOrphans(); n != 1 {
+		t.Fatalf("ReconcileOrphans folded %d, want 1", n)
+	}
+
+	hosts := s.Snapshot()
+	if len(hosts) != 2 {
+		t.Fatalf("got %d hosts, want 2 (MAC host + untouched orphan)", len(hosts))
+	}
+
+	merged := find(t, s, "aa:bb:cc:dd:ee:01")
+	if merged.MDNSName != "Garage Door 4AE53A" {
+		t.Errorf("MDNSName = %q, want the orphan's name folded in", merged.MDNSName)
+	}
+	if merged.Comment != "note" {
+		t.Errorf("Comment = %q, want the orphan's comment preserved", merged.Comment)
+	}
+	if !merged.FirstSeen.Equal(t0.Add(-time.Hour)) {
+		t.Errorf("FirstSeen = %v, want the earlier orphan time", merged.FirstSeen)
+	}
+	if !merged.LastSeen.Equal(t0.Add(time.Hour)) {
+		t.Errorf("LastSeen = %v, want the later orphan time", merged.LastSeen)
+	}
+
+	// The unowned orphan is genuinely unresolved and must survive.
+	find(t, s, "192.168.7.250")
+}
+
 func TestFirstLastSeenMonotonic(t *testing.T) {
 	s := New()
 	t1 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)

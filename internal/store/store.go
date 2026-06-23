@@ -89,21 +89,22 @@ func (s *Store) Upsert(o Observation) {
 		o.Seen = time.Now()
 	}
 
-	saved, deletedKey, persister := s.upsertLocked(o)
+	saved, deletedKeys, persister := s.upsertLocked(o)
 
 	// Persist outside the lock so DB IO never blocks other readers/writers.
 	if persister != nil && saved != nil {
-		if deletedKey != "" {
-			_ = persister.DeleteHost(deletedKey)
+		for _, k := range deletedKeys {
+			_ = persister.DeleteHost(k)
 		}
 		_ = persister.SaveHost(*saved)
 	}
 }
 
 // upsertLocked performs the in-memory merge under the write lock and returns a
-// deep copy of the affected host (for persistence), any key that was vacated by
-// a re-key migration, and the active persister.
-func (s *Store) upsertLocked(o Observation) (saved *Host, deletedKey string, persister Persister) {
+// deep copy of the affected host (for persistence), any keys that were vacated
+// when IP-keyed orphans were folded into the MAC record, and the active
+// persister.
+func (s *Store) upsertLocked(o Observation) (saved *Host, deletedKeys []string, persister Persister) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -112,28 +113,33 @@ func (s *Store) upsertLocked(o Observation) (saved *Host, deletedKey string, per
 		key = o.IPv4[0]
 	}
 	if key == "" {
-		return nil, "", nil
-	}
-
-	// If this MAC was first seen via an IP-keyed record, migrate it.
-	if o.MAC != "" {
-		if _, ok := s.hosts[o.MAC]; !ok {
-			for _, ip := range o.IPv4 {
-				if h, ok := s.hosts[ip]; ok && h.MAC == "" {
-					delete(s.hosts, ip)
-					h.Key = o.MAC
-					s.hosts[o.MAC] = h
-					deletedKey = ip
-					break
-				}
-			}
-		}
+		return nil, nil, nil
 	}
 
 	h := s.hosts[key]
 	if h == nil {
 		h = &Host{Key: key, FirstSeen: o.Seen}
 		s.hosts[key] = h
+	}
+
+	// When we know the MAC, fold any IP-keyed orphan (MAC == "") that shares one
+	// of this observation's IPs into the MAC-keyed host, then vacate the orphan's
+	// key. Orphans arise when a host is observed by IP (mDNS/DNS-SD/ping) before
+	// ARP resolves its MAC — common on a dual-homed monitor host, where replies
+	// arrive on an interface whose neighbor cache hasn't resolved the sender yet.
+	// This runs on every MAC-bearing upsert, not only when the MAC record is
+	// first created, so a long-lived MAC record still sweeps up later-born
+	// orphans instead of coexisting with them forever.
+	if o.MAC != "" {
+		for _, ip := range o.IPv4 {
+			orphan := s.hosts[ip]
+			if orphan == nil || orphan == h || orphan.MAC != "" {
+				continue
+			}
+			absorb(h, orphan)
+			delete(s.hosts, ip)
+			deletedKeys = append(deletedKeys, ip)
+		}
 	}
 
 	if o.MAC != "" {
@@ -168,7 +174,106 @@ func (s *Store) upsertLocked(o Observation) (saved *Host, deletedKey string, per
 	}
 
 	clone := cloneHost(h)
-	return &clone, deletedKey, s.persister
+	return &clone, deletedKeys, s.persister
+}
+
+// ReconcileOrphans folds every IP-keyed orphan (MAC == "") whose IP is already
+// claimed by a MAC-keyed host into that host, then deletes the orphan. It heals
+// inventories persisted before per-upsert reconciliation existed, where an
+// IP-only row and the device's MAC row coexisted indefinitely. Run it once at
+// startup after Restore. Returns the number of orphans folded away.
+func (s *Store) ReconcileOrphans() int {
+	merged, deleted, persister := s.reconcileOrphansLocked()
+
+	// Persist outside the lock: delete the vacated orphan rows, then save the
+	// merged MAC-keyed hosts that absorbed them.
+	if persister != nil {
+		for _, k := range deleted {
+			_ = persister.DeleteHost(k)
+		}
+		for i := range merged {
+			_ = persister.SaveHost(merged[i])
+		}
+	}
+	return len(deleted)
+}
+
+func (s *Store) reconcileOrphansLocked() (merged []Host, deleted []string, persister Persister) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Index every IP claimed by a MAC-keyed host back to that host.
+	ownerByIP := make(map[string]*Host)
+	for _, h := range s.hosts {
+		if h.MAC == "" {
+			continue
+		}
+		for _, ip := range h.IPv4 {
+			ownerByIP[ip] = h
+		}
+	}
+
+	touched := make(map[*Host]bool)
+	for key, h := range s.hosts {
+		if h.MAC != "" {
+			continue // not an orphan
+		}
+		var owner *Host
+		for _, ip := range h.IPv4 {
+			if o := ownerByIP[ip]; o != nil && o != h {
+				owner = o
+				break
+			}
+		}
+		if owner == nil {
+			continue // genuinely unresolved host — keep it
+		}
+		absorb(owner, h)
+		delete(s.hosts, key)
+		deleted = append(deleted, key)
+		touched[owner] = true
+	}
+
+	for h := range touched {
+		merged = append(merged, cloneHost(h))
+	}
+	return merged, deleted, s.persister
+}
+
+// absorb merges an orphan record (src) into a MAC-keyed host (dst). Empty
+// scalar fields on dst are filled from src so data the orphan learned while
+// IP-keyed (an mDNS name, a user comment) is preserved; non-empty dst fields
+// win. Address lists are unioned and the seen-times widened to the union.
+func absorb(dst, src *Host) {
+	if dst.Vendor == "" {
+		dst.Vendor = src.Vendor
+	}
+	if dst.Hostname == "" {
+		dst.Hostname = src.Hostname
+	}
+	if dst.MDNSName == "" {
+		dst.MDNSName = src.MDNSName
+	}
+	if dst.MDNSModel == "" {
+		dst.MDNSModel = src.MDNSModel
+	}
+	if dst.Category == "" {
+		dst.Category = src.Category
+	}
+	if dst.Comment == "" {
+		dst.Comment = src.Comment
+	}
+	dst.IPv4 = mergeStrings(dst.IPv4, src.IPv4)
+	dst.SecondaryIPs = mergeStrings(dst.SecondaryIPs, src.SecondaryIPs)
+	dst.IPv6Local = mergeStrings(dst.IPv6Local, src.IPv6Local)
+	dst.IPv6Global = mergeStrings(dst.IPv6Global, src.IPv6Global)
+	dst.MDNSServices = mergeStrings(dst.MDNSServices, src.MDNSServices)
+	if !src.FirstSeen.IsZero() && (dst.FirstSeen.IsZero() || src.FirstSeen.Before(dst.FirstSeen)) {
+		dst.FirstSeen = src.FirstSeen
+	}
+	if src.LastSeen.After(dst.LastSeen) {
+		dst.LastSeen = src.LastSeen
+	}
 }
 
 // SetComment sets the user-editable note on the host identified by key and

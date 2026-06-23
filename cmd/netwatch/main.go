@@ -56,7 +56,7 @@ func (l *stringList) Set(v string) error {
 func main() {
 	var (
 		ifaceName = flag.String("iface", "", "network interface to scan (default: auto-detect)")
-		addr      = flag.String("listen", ":8080", "HTTP listen address")
+		addr      = flag.String("listen", ":9911", "HTTP listen address")
 		interval  = flag.Duration("interval", 30*time.Second, "rescan interval")
 		pingTO    = flag.Duration("ping-timeout", 2*time.Second, "ping sweep reply window")
 		mdnsWait  = flag.Duration("mdns-wait", 2*time.Second, "mDNS listen window")
@@ -106,6 +106,11 @@ func main() {
 			}
 			log.Printf("persisting to %s", resolvedDB)
 			st.SetPersister(db)
+			// Heal duplicates persisted by older versions: fold any IP-keyed
+			// orphan into the MAC-keyed host that already claims its IP.
+			if n := st.ReconcileOrphans(); n > 0 {
+				log.Printf("reconciled %d duplicate IP-keyed host(s) into their MAC records", n)
+			}
 		}
 	}
 

@@ -56,7 +56,7 @@ func (l *stringList) Set(v string) error {
 func main() {
 	var (
 		ifaceName = flag.String("iface", "", "network interface to scan (default: auto-detect)")
-		addr      = flag.String("listen", ":8080", "HTTP listen address")
+		addr      = flag.String("listen", ":9911", "HTTP listen address")
 		interval  = flag.Duration("interval", 30*time.Second, "rescan interval")
 		pingTO    = flag.Duration("ping-timeout", 2*time.Second, "ping sweep reply window")
 		mdnsWait  = flag.Duration("mdns-wait", 2*time.Second, "mDNS listen window")

@@ -106,6 +106,11 @@ func main() {
 			}
 			log.Printf("persisting to %s", resolvedDB)
 			st.SetPersister(db)
+			// Heal duplicates persisted by older versions: fold any IP-keyed
+			// orphan into the MAC-keyed host that already claims its IP.
+			if n := st.ReconcileOrphans(); n > 0 {
+				log.Printf("reconciled %d duplicate IP-keyed host(s) into their MAC records", n)
+			}
 		}
 	}
 

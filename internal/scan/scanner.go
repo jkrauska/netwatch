@@ -243,22 +243,26 @@ func (s *Scanner) upsert(o store.Observation) {
 func (s *Scanner) upsertHosts(addrs []netip.Addr, macByIP map[string]string, ipsByMAC map[string][]netip.Addr, now time.Time) []netip.Addr {
 	seenMAC := make(map[string]bool)
 	for _, ip := range dedupeAddrs(addrs) {
-		mac := macByIP[ip.String()]
-
-		observation := store.Observation{MAC: mac, Seen: now}
-		classifyIP(ip, s.Iface.Prefix, &observation)
+		ipStr := ip.String()
+		mac := macByIP[ipStr]
 
 		if mac != "" {
+			if seenMAC[mac] {
+				continue
+			}
+			seenMAC[mac] = true
+			observation := store.Observation{MAC: mac, Seen: now, RefreshIPs: true}
+			for _, nip := range ipsByMAC[mac] {
+				classifyIP(nip, s.Iface.Prefix, &observation)
+			}
 			observation.Vendor = s.OUI.Lookup(mac)
 			observation.Category = Classify(observation.Vendor, "", "")
-			// Fold in any IPv6 neighbors sharing this MAC.
-			if !seenMAC[mac] {
-				seenMAC[mac] = true
-				for _, nip := range ipsByMAC[mac] {
-					classifyIP(nip, s.Iface.Prefix, &observation)
-				}
-			}
+			s.upsert(observation)
+			continue
 		}
+
+		observation := store.Observation{Seen: now, RefreshIPs: true}
+		classifyIP(ip, s.Iface.Prefix, &observation)
 		s.upsert(observation)
 	}
 	return addrs
@@ -292,7 +296,9 @@ func (s *Scanner) enrich(ctx context.Context, addrs []netip.Addr, macByIP map[st
 		name = TrimTrailingMAC(name, mac)
 		observation := store.Observation{MAC: mac, MDNSName: name, Seen: time.Now()}
 		observation.Category = Classify(s.OUI.Lookup(mac), "", name)
-		classifyIP(ip, s.Iface.Prefix, &observation)
+		if mac == "" {
+			classifyIP(ip, s.Iface.Prefix, &observation)
+		}
 		s.upsert(observation)
 	}
 
@@ -308,7 +314,9 @@ func (s *Scanner) enrich(ctx context.Context, addrs []netip.Addr, macByIP map[st
 		name = TrimTrailingMAC(name, mac)
 		observation := store.Observation{MAC: mac, Hostname: name, Seen: time.Now()}
 		observation.Category = Classify(s.OUI.Lookup(mac), name, "")
-		classifyIP(ip, s.Iface.Prefix, &observation)
+		if mac == "" {
+			classifyIP(ip, s.Iface.Prefix, &observation)
+		}
 		s.upsert(observation)
 	}
 }
@@ -339,7 +347,9 @@ func (s *Scanner) browse(ctx context.Context) {
 			Seen:         time.Now(),
 		}
 		observation.Category = ClassifyService(s.OUI.Lookup(mac), d.Model, d.Services)
-		classifyIP(ip, s.Iface.Prefix, &observation)
+		if mac == "" {
+			classifyIP(ip, s.Iface.Prefix, &observation)
+		}
 		s.upsert(observation)
 	}
 }

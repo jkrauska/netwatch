@@ -179,8 +179,8 @@ func TestMergeDoesNotClobber(t *testing.T) {
 	// Learn vendor first, then a name in a later partial observation.
 	s.Upsert(Observation{MAC: mac, Vendor: "Acme", IPv4: []string{"10.0.0.5"}})
 	s.Upsert(Observation{MAC: mac, Hostname: "printer.local", Category: "printer"})
-	// An empty-field observation must not blank existing data.
-	s.Upsert(Observation{MAC: mac, IPv4: []string{"10.0.0.6"}})
+	// A neighbor-table refresh replaces stale IPv4 with the current address.
+	s.Upsert(Observation{MAC: mac, IPv4: []string{"10.0.0.6"}, RefreshIPs: true})
 
 	h := find(t, s, mac)
 	if h.Vendor != "Acme" {
@@ -192,8 +192,35 @@ func TestMergeDoesNotClobber(t *testing.T) {
 	if h.Category != "printer" {
 		t.Errorf("Category = %q, want printer", h.Category)
 	}
+	if len(h.IPv4) != 1 || h.IPv4[0] != "10.0.0.6" {
+		t.Errorf("IPv4 = %v, want only the refreshed address", h.IPv4)
+	}
+}
+
+func TestRefreshIPsKeepsDualHomed(t *testing.T) {
+	s := New()
+	mac := "de:ad:be:ef:00:03"
+	s.Upsert(Observation{
+		MAC: mac, Vendor: "Acme",
+		IPv4: []string{"10.0.0.5", "10.0.0.6"},
+		RefreshIPs: true,
+	})
+
+	h := find(t, s, mac)
 	if len(h.IPv4) != 2 {
-		t.Errorf("IPv4 = %v, want both addresses merged", h.IPv4)
+		t.Fatalf("IPv4 = %v, want both concurrent addresses", h.IPv4)
+	}
+}
+
+func TestRefreshIPsClearsStaleIPv4(t *testing.T) {
+	s := New()
+	mac := "de:ad:be:ef:00:04"
+	s.Upsert(Observation{MAC: mac, IPv4: []string{"10.0.0.5", "10.0.0.6"}})
+	s.Upsert(Observation{MAC: mac, IPv4: []string{"10.0.0.6"}, RefreshIPs: true})
+
+	h := find(t, s, mac)
+	if len(h.IPv4) != 1 || h.IPv4[0] != "10.0.0.6" {
+		t.Errorf("IPv4 = %v, want only the current address", h.IPv4)
 	}
 }
 
@@ -225,7 +252,7 @@ func TestCommentSurvivesObservationMerge(t *testing.T) {
 	s.SetComment(mac, "lab raspberry pi")
 
 	// A later scan (no comment field on observations) must not blank the note.
-	s.Upsert(Observation{MAC: mac, IPv4: []string{"10.0.0.6"}, Hostname: "pi.local"})
+	s.Upsert(Observation{MAC: mac, IPv4: []string{"10.0.0.6"}, Hostname: "pi.local", RefreshIPs: true})
 
 	if got := find(t, s, mac).Comment; got != "lab raspberry pi" {
 		t.Errorf("Comment = %q, want it preserved across upsert", got)

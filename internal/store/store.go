@@ -42,6 +42,10 @@ type Observation struct {
 	MDNSServices []string
 	Category     string
 	Seen         time.Time
+	// RefreshIPs, when true, replaces IP list fields with the observation's
+	// values rather than merging. Used for neighbor-table snapshots so a device
+	// keeps only addresses currently resolved, not every DHCP lease it ever had.
+	RefreshIPs bool
 }
 
 // Persister is an optional write-through backend (e.g. SQLite). The store
@@ -161,10 +165,17 @@ func (s *Store) upsertLocked(o Observation) (saved *Host, deletedKeys []string, 
 		h.Category = o.Category
 	}
 	h.MDNSServices = mergeStrings(h.MDNSServices, o.MDNSServices)
-	h.IPv4 = mergeStrings(h.IPv4, o.IPv4)
-	h.SecondaryIPs = mergeStrings(h.SecondaryIPs, o.SecondaryIPs)
-	h.IPv6Local = mergeStrings(h.IPv6Local, o.IPv6Local)
-	h.IPv6Global = mergeStrings(h.IPv6Global, o.IPv6Global)
+	if o.RefreshIPs {
+		h.IPv4 = sortedCopy(o.IPv4)
+		h.SecondaryIPs = sortedCopy(o.SecondaryIPs)
+		h.IPv6Local = sortedCopy(o.IPv6Local)
+		h.IPv6Global = sortedCopy(o.IPv6Global)
+	} else {
+		h.IPv4 = mergeStrings(h.IPv4, o.IPv4)
+		h.SecondaryIPs = mergeStrings(h.SecondaryIPs, o.SecondaryIPs)
+		h.IPv6Local = mergeStrings(h.IPv6Local, o.IPv6Local)
+		h.IPv6Global = mergeStrings(h.IPv6Global, o.IPv6Global)
+	}
 
 	if o.Seen.After(h.LastSeen) {
 		h.LastSeen = o.Seen
@@ -339,6 +350,17 @@ func primaryIP(h Host) string {
 		return h.IPv4[0]
 	}
 	return ""
+}
+
+func sortedCopy(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func mergeStrings(existing, incoming []string) []string {
